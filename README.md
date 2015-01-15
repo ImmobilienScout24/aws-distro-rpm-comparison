@@ -5,7 +5,7 @@ Compare available RPMs (RPM provides) in different Linux distros on AWS.
 
 Example usage (for eu-west-1):
 ```
-./aws-distro-rpm-comparison.py --debug vpc-123456 ami-30ff5c47 ami-6e7bd919 root@ami-8cff51fb
+./aws-distro-rpm-comparison.py --debug vpc-123456 root@ami-30ff5c47 ami-6e7bd919 ami-9cfd53eb
 ```
 
 Please use your own VPC or send me pull request for VPC autodetection (or auto-creation)

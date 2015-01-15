@@ -17,6 +17,7 @@ Options:
   --defaultuser=USER   Default user to use for USER@AMI_ID [default: ec2-user]
   --verbose            Verbose logging
   --debug              Debug logging
+  --interactive        Dump SSH Key and IPs and wait for before removing EC2 instances
 
 Notes:
 
@@ -41,13 +42,20 @@ class Environment(object):
     wait_delay_in_seconds = 10
 
     def decommission(self):
+        if self.interactive and hasattr(self,"keypair") and hasattr(self,"instances"):
+            print("\n\nSSH Key:\n{0}\nInstances:\n\t{1}\nYou can explore those instances".format(
+                self.keypair.material,
+                "\n\t".join("{0.user}@{0.ip_address} ({0.image_id})".format(instance) for instance in self.instances)
+            ))
+            raw_input("Press ENTER to continue and remove the environment...")
+
         logger.info("Removing Environment")
 
         try:
             if self.instances:
                 instance_ids = [i.id for i in self.instances]
                 logger.info("Terminating Instances {0}".format(", ".join(instance_ids)))
-                self.conn.terminate_instances(instance_ids)
+                self.ec2_conn.terminate_instances(instance_ids)
                 self.wait_for_instances(target_state="terminated")
         except Exception as e:
             logger.exception(e)
@@ -65,15 +73,16 @@ class Environment(object):
             pass
 
 
-    def __init__(self, region, vpc_id):
+    def __init__(self, region, vpc_id, interactive):
+        self.interactive = interactive
         atexit.register(self.decommission)
         try:
-            self.conn = boto.ec2.connect_to_region(region)
+            self.ec2_conn = boto.ec2.connect_to_region(region)
             self.vpc_id = vpc_id
             self.myid = os.environ["USER"] + "_" + platform.node()
-            self.keypair = self.conn.create_key_pair(self.myid)
+            self.keypair = self.ec2_conn.create_key_pair(self.myid)
             logger.info("Created Key Pair {0}".format(self.keypair.name))
-            self.securitygroup = self.conn.create_security_group(name=self.myid,
+            self.securitygroup = self.ec2_conn.create_security_group(name=self.myid,
                                                                  description='Temporary Security Group',
                                                                  vpc_id=self.vpc_id)
             logger.info("Created Security Group {0}".format(self.securitygroup.id))
@@ -85,7 +94,7 @@ class Environment(object):
 
 
     def run_instances(self, ami_id, user, instance_type):
-        instances = self.conn.run_instances(ami_id,
+        instances = self.ec2_conn.run_instances(ami_id,
                                             security_group_ids=[self.securitygroup.id],
                                             instance_type=instance_type,
                                             subnet_id=self.first_subnet.id,
@@ -93,9 +102,9 @@ class Environment(object):
         time.sleep(1)  # give AWS some time to collect its wits before calling add_tag
         for instance in instances:
             instance.add_tag("Name", __file__)
-            logger.info("Created Instance {id} for {image_id}".format(**vars(instance)))
+            logger.info("Created Instance {0.id} for {0.image_id}".format(instance))
             instance_object = Instance(instance_object=instance,
-                                       image_object=self.conn.get_image(instance.image_id),
+                                       image_object=self.ec2_conn.get_image(instance.image_id),
                                        user=user)
             self.instances.append(instance_object)
 
@@ -145,11 +154,14 @@ class Instance(object):
 
     @property
     def ip_address(self):
-        return self.instance.ip_address
+        try:
+            return self.instance.ip_address
+        except Exception:
+            return None
 
 
-def run_main(aws_region, instance_type, vpc_id, user_at_ami_id_list, default_user):
-    environment = Environment(region=aws_region, vpc_id=vpc_id)
+def run_main(aws_region, instance_type, vpc_id, user_at_ami_id_list, default_user, interactive=False):
+    environment = Environment(region=aws_region, vpc_id=vpc_id, interactive=interactive)
 
     for user_at_ami_id in user_at_ami_id_list:
         user_and_ami_id = user_at_ami_id.split("@")
@@ -166,28 +178,26 @@ def run_main(aws_region, instance_type, vpc_id, user_at_ami_id_list, default_use
     def check_date():
         return run("date", quiet=True)
 
-    # @parallel
+    @parallel
     def get_provides_list():
         sudo("yum -q -y install yum-utils", quiet=False)
         return sudo('repoquery --provides -a | cut -f 1 -d " " | sort -u', quiet=True)
 
-    env.user = default_user
-    env.password = "There Is No Password in EC2 But Fabric Wants to Have One :-("
+    env.abort_on_prompts = True
     env.no_keys = True
     env.key = environment.keypair.material
     env.disable_known_hosts = True
     env.connection_attempts = 50
     env.timeout = 10
 
-    instance_for_host = dict((instance.ip_address, instance) for instance in environment.instances)
-    host_list = [instance.user + "@" + instance.ip_address for instance in environment.instances]
+    instance_for_user_at_host = dict((instance.user + "@" + instance.ip_address, instance) for instance in environment.instances)
+    host_list = instance_for_user_at_host.keys()
     result_list = execute(get_provides_list, hosts=host_list)
-    for host, provides_list in result_list.items():
-        print(host)
-        instance = instance_for_host[host]
-        print("Host {ip_address} is {image_id} return code is {0.return_code}".format(provides_list, **vars(instance)))
+    for user_at_host, provides_list in result_list.items():
+        instance = instance_for_user_at_host[user_at_host]
+        print("Host {1.ip_address} is {1.image_id} return code is {0.return_code}".format(provides_list, instance))
         if provides_list:
-            file_name = "{image_id}_{image_name}_{image_description}.txt".format(**vars(instance))
+            file_name = "{0.image_id}_{0.image_name}_{0.image_description}.txt".format(instance)
             with open(file_name, "w") as output_file:
                 output_file.write(provides_list)
                 logger.info(
@@ -211,7 +221,8 @@ if __name__ == '__main__':
                  instance_type=arguments["--type"],
                  vpc_id=arguments["VPC_ID"],
                  user_at_ami_id_list=arguments["USER@AMI_ID"],
-                 default_user=arguments["--defaultuser"])
+                 default_user=arguments["--defaultuser"],
+                 interactive=arguments["--interactive"])
     except KeyboardInterrupt:
         pass
     except Exception as e:

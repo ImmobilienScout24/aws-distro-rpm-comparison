@@ -8,11 +8,12 @@ Example usage (for eu-west-1):
 ./aws-distro-rpm-comparison.py --verbose vpc-123456 root@ami-30ff5c47 ami-6e7bd919 ami-9cfd53eb
 ```
 
-Please use your own VPC or send me pull request for VPC autodetection (or auto-creation)
+You must specify your own VPC or send me pull request for VPC autodetection (or auto-creation). The script will create an SSH key and security group to use for the instances it spawns. All these ressources are removed in the end. 
 
 *Notes:*
 * Your VPC must automatically associate public IPs to new instances.
 * Sometimes an instance is not accessible. Probably because our SSH connection comes too soon (e.g. before cloud-init could install the keys).
+* The `--interactive` command line option allows you to interactively explore the instances before removal.
 
 Installation
 ------------

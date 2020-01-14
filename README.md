@@ -1,6 +1,8 @@
 aws-distro-rpm-comparison
 =========================
 
+# This project is DEPRECATED and not any longer supported
+
 Compare available RPMs (RPM provides) in different Linux distros on AWS.
 
 Example usage (for eu-west-1):
